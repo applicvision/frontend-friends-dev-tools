@@ -1,0 +1,33 @@
+{
+  "name": "@applicvision/frontend-friends-diagnostics",
+  "version": "1.0.0",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "bin": {
+    "diagnose-fragments": "bin/diagnose.bin.ts"
+  },
+  "scripts": {
+    "test": "node --test test/test.ts"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/applicvision/frontend-friends-dev-tools.git"
+  },
+  "license": "MIT",
+  "description": "Diagnostics for your dynamic fragments in Frontend friends.",
+  "type": "module",
+  "files": [
+    "index.ts",
+    "bin/**.ts"
+  ],
+  "dependencies": {
+    "@applicvision/frontend-friends": "^1.16.3",
+    "@applicvision/js-toolbox": "^2.11.4",
+    "html-validate": "^10.7.0",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1"
+  }
+}

@@ -1,0 +1,12 @@
+{
+	"compilerOptions": {
+		"noEmit": true,
+		"target": "esnext",
+		"module": "nodenext",
+		"strict": true,
+		"allowJs": true,
+		"maxNodeModuleJsDepth": 1,
+		"allowImportingTsExtensions": true,
+		"erasableSyntaxOnly": true,
+	},
+}
