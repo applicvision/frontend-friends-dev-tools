@@ -1,13 +1,19 @@
 {
   "name": "@applicvision/frontend-friends-diagnostics",
-  "version": "1.0.0",
+  "version": "1.1.0",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "bin": {
-    "diagnose-fragments": "bin/diagnose.bin.ts"
+    "diagnose-fragments": "dist/bin/diagnose.bin.js"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "npm run build",
     "test": "node --test test/test.ts"
   },
   "repository": {
@@ -18,8 +24,8 @@
   "description": "Diagnostics for your dynamic fragments in Frontend friends.",
   "type": "module",
   "files": [
-    "index.ts",
-    "bin/**.ts"
+    "dist/**",
+    "README.md"
   ],
   "dependencies": {
     "@applicvision/frontend-friends": "^1.16.3",

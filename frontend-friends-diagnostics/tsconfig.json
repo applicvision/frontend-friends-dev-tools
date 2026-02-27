@@ -8,5 +8,5 @@
 		"maxNodeModuleJsDepth": 1,
 		"allowImportingTsExtensions": true,
 		"erasableSyntaxOnly": true,
-	},
+	}
 }
