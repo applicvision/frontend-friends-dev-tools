@@ -1,0 +1,9 @@
+{
+	"injectionSelector": "L:meta.embedded.block.css, L:meta.embedded.block.html meta.element.structure.svg.html, L:meta.embedded.block.html meta.attribute, L:meta.embedded.block.svg meta.tag",
+	"patterns": [
+		{
+			"include": "source.ts#template-substitution-element"
+		}
+	],
+	"scopeName": "ff-template-substitution"
+}
