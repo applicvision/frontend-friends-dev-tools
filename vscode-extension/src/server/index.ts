@@ -229,9 +229,12 @@ connection.onCompletion((params, _token) => {
 
 // TODO: Handle new files
 
+let notificationSent = false
 documents.onDidChangeContent(async (change) => {
 
 	const text = change.document.getText()
+
+	const usesFF = text.includes('@applicvision/frontend-friends')
 
 	const path = fileURLToPath(change.document.uri)
 
@@ -245,12 +248,16 @@ documents.onDidChangeContent(async (change) => {
 
 	if (!program) return
 
-	const diagnostics = await runDiagnostics(program, path)
+	const diagnostics = usesFF ? await runDiagnostics(program, path) : []
 
 	connection.sendDiagnostics({
 		uri: change.document.uri,
 		diagnostics: diagnostics
 	})
+
+	if (!notificationSent && usesFF) {
+		connection.sendNotification('ff-used')
+	}
 })
 
 function logVirtualDoc(doc: string, position: Position) {

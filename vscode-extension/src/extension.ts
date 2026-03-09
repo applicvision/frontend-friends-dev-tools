@@ -1,6 +1,6 @@
 // The module 'vscode' contains the VS Code extensibility API
 // Import the module and reference it with the alias vscode in your code below
-import { ExtensionContext, Uri, workspace } from 'vscode';
+import { ExtensionContext, Uri, workspace, window, StatusBarAlignment, MarkdownString, StatusBarItem, TextEditor } from 'vscode';
 
 import {
 	LanguageClient,
@@ -12,6 +12,9 @@ import {
 let client: LanguageClient | undefined
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
+let statusBarItem: StatusBarItem | undefined
+let frontendFriendsDetected = false
+
 export async function activate(context: ExtensionContext) {
 
 	// Use the console to output diagnostic information (console.log) and errors (console.error)
@@ -59,7 +62,39 @@ export async function activate(context: ExtensionContext) {
 		clientOptions
 	)
 
-	client.start()
+	client.onNotification('ff-used', showStatusBarItem)
+
+	await client.start()
+
+	const item = window.createStatusBarItem(StatusBarAlignment.Right)
+	item.text = '$(code) FF'
+	item.tooltip = new MarkdownString('### Frontend Friends\n' +
+		'Dev tools are active.'
+	)
+
+	statusBarItem = item
+
+	context.subscriptions.push(item)
+
+	context.subscriptions.push(
+		window.onDidChangeActiveTextEditor(updateStatusBarVisibility)
+	);
+}
+
+function updateStatusBarVisibility(editor: TextEditor | undefined) {
+	if (!statusBarItem) return
+
+	const langId = editor?.document.languageId
+	if (frontendFriendsDetected && (langId == 'javascript' || langId == 'typescript')) {
+		statusBarItem.show()
+	} else {
+		statusBarItem.hide()
+	}
+}
+
+function showStatusBarItem() {
+	frontendFriendsDetected = true
+	statusBarItem?.show()
 }
 
 // This method is called when your extension is deactivated
