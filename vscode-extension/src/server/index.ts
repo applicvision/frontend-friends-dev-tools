@@ -1,6 +1,6 @@
 import { getLanguageService, newHTMLDataProvider } from 'vscode-html-languageservice';
 import { getCSSLanguageService } from 'vscode-css-languageservice';
-import { CompletionParams, createConnection, FileChangeType, HoverParams, ProposedFeatures, TextDocuments, TextDocumentSyncKind } from 'vscode-languageserver/node';
+import { CompletionParams, createConnection, HoverParams, ProposedFeatures, TextDocuments, TextDocumentSyncKind } from 'vscode-languageserver/node';
 import { TextDocument, Position } from 'vscode-languageserver-textdocument';
 import ts from 'typescript'
 import { fileURLToPath } from 'node:url';

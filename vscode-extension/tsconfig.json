@@ -1,6 +1,6 @@
 {
-	"paths": [
-		"src/**"
+	"include": [
+		"src/**/*"
 	],
 	"compilerOptions": {
 		"module": "node16",
