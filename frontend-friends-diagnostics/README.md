@@ -1,6 +1,6 @@
 # Frontend Friends Diagnostics
 
-Diagnose the HTML and interpolations of dynamic fragments built with [Frontend friends](https://github.com/applicvision/frontend-friends).
+Diagnose the HTML and interpolations of dynamic fragments built with [Frontend Friends](https://github.com/applicvision/frontend-friends).
 
 ## Install
 

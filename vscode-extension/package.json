@@ -1,5 +1,6 @@
 {
   "name": "frontend-friends-extension",
+  "publisher": "ApplicVision",
   "displayName": "Frontend Friends",
   "description": "Syntax highlighting and diagnostics for Frontend Friends html tagged fragments.",
   "version": "1.0.0",
@@ -13,7 +14,14 @@
   },
   "license": "MIT",
   "categories": [
-    "Other"
+    "Linters"
+  ],
+  "keywords": [
+    "frontend",
+    "diagnostics",
+    "tagged",
+    "template",
+    "html"
   ],
   "activationEvents": [
     "onLanguage:javascript",
