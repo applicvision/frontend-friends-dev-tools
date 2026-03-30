@@ -42,7 +42,7 @@ export async function activate(context: ExtensionContext) {
 			}
 		} else if (client) {
 			console.log('Stopped language server')
-			client.stop()
+			await client.stop()
 			frontendFriendsDetected = false
 			statusBarItem?.hide()
 			client = undefined
@@ -99,13 +99,11 @@ async function workspaceFoldersWithFrontendFriends() {
 		const packageJsonStr = new TextDecoder().decode(packageFile)
 		const packageJson = JSON.parse(packageJsonStr)
 
-		const { name, dependencies, devDependencies } = packageJson
-
-		const deps = { ...dependencies, ...devDependencies }
+		const { name, dependencies = {}, devDependencies = {} } = packageJson
 
 		const ffName = '@applicvision/frontend-friends'
 
-		return name == ffName || deps[ffName] || devDependencies[ffName] ? folder.uri.fsPath : null
+		return name == ffName || dependencies[ffName] || devDependencies[ffName] ? folder.uri.fsPath : null
 	}))
 	return results.map(result => result.status == 'fulfilled' ? result.value : null)
 		.filter(result => result != null)

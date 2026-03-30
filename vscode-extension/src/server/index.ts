@@ -36,8 +36,7 @@ const cssLanguageService = getCSSLanguageService()
 const tsServices = new Map<string, ts.LanguageService>()
 
 connection.onInitialize((params) => {
-	const frontendFriendsFolders: string[] = params.initializationOptions.folders
-	// const workspaceUri = params.workspaceFolders?.[0].uri
+	const frontendFriendsFolders: string[] = params.initializationOptions?.folders ?? []
 	frontendFriendsFolders.forEach(folder => {
 		const tsService = createTSService(folder)
 		if (tsService) {
@@ -62,6 +61,7 @@ connection.onNotification('ff-directories', (params: { folders: string[] }) => {
 	Array.from(tsServices.keys())
 		.filter(workspace => !params.folders.includes(workspace))
 		.forEach(removedWorkspace => {
+			tsServices.get(removedWorkspace)?.dispose()
 			tsServices.delete(removedWorkspace)
 		})
 
@@ -127,7 +127,7 @@ function createTSService(path: string) {
 			}
 		},
 		getScriptVersion: fileName => String(activeFilesCache.get(fileName)?.version ?? 0),
-		getCurrentDirectory: () => process.cwd(),
+		getCurrentDirectory: () => path,
 		getDefaultLibFileName: options => ts.getDefaultLibFilePath(options),
 
 		fileExists: ts.sys.fileExists,
@@ -146,11 +146,7 @@ const fileSystemCache = new Map<string, ts.IScriptSnapshot>()
 function getTsSourceFile(document: TextDocument) {
 	const path = URI.parse(document.uri).fsPath
 
-	const sourceFile = getProgramForPath(path)?.getSourceFile(path)
-	if (!sourceFile) throw new Error('Missing sourcefile')
-
-	return sourceFile
-
+	return getProgramForPath(path)?.getSourceFile(path)
 }
 
 function activeTaggedTemplateDocument(params: HoverParams | CompletionParams): { type: 'html' | 'css' | 'xml', document: TextDocument } | undefined {
@@ -164,6 +160,8 @@ function activeTaggedTemplateDocument(params: HoverParams | CompletionParams): {
 	}
 
 	let tsSource = getTsSourceFile(document)
+
+	if (!tsSource) return
 
 	const offset = document.offsetAt(params.position)
 
@@ -273,7 +271,8 @@ documents.onDidChangeContent(async (change) => {
 	})
 
 	if (!notificationSent && usesFF) {
-		connection.sendNotification('ff-used')
+		await connection.sendNotification('ff-used')
+		notificationSent = true
 	}
 })
 
