@@ -3,7 +3,9 @@
 import {
 	ExtensionContext,
 	Uri, workspace, window, StatusBarAlignment,
-	MarkdownString, StatusBarItem, TextEditor
+	MarkdownString, StatusBarItem, TextEditor,
+	RelativePattern, FileSystemWatcher,
+	Disposable, WorkspaceFolder
 } from 'vscode';
 
 import {
@@ -18,6 +20,7 @@ let client: LanguageClient | undefined
 // Your extension is activated the very first time the command is executed
 let statusBarItem: StatusBarItem | undefined
 let frontendFriendsDetected = false
+let serverPath: string
 
 export async function activate(context: ExtensionContext) {
 
@@ -30,32 +33,72 @@ export async function activate(context: ExtensionContext) {
 
 	statusBarItem = item
 
-	const startLanguageServerIfSuitable = async () => {
-		const frontendFriendsDirectories = await workspaceFoldersWithFrontendFriends()
-		if (frontendFriendsDirectories.length > 0) {
-			if (!client) {
-				client = createLanguageServerClient(context.asAbsolutePath('out/server/index.js'), frontendFriendsDirectories)
-				await client.start()
-				console.log('Started language server')
-			} else {
-				await client.sendNotification('ff-directories', { folders: frontendFriendsDirectories })
-			}
-		} else if (client) {
-			console.log('Stopped language server')
-			await client.stop()
-			frontendFriendsDetected = false
-			statusBarItem?.hide()
-			client = undefined
-		}
+	serverPath = context.asAbsolutePath('out/server/index.js')
+
+	const activeWatchers = new Map<string, FileSystemWatcher>();
+
+	const watchPackageJSON = (folder: WorkspaceFolder) => {
+		const pattern = new RelativePattern(folder, 'package.json')
+		const workspaceWatcher = workspace.createFileSystemWatcher(pattern)
+		workspaceWatcher.onDidCreate(refreshLanguageServer)
+		workspaceWatcher.onDidChange(refreshLanguageServer)
+		workspaceWatcher.onDidDelete(refreshLanguageServer)
+		activeWatchers.set(folder.uri.fsPath, workspaceWatcher)
 	}
+
+	workspace.workspaceFolders?.forEach(watchPackageJSON)
 
 	context.subscriptions.push(
 		item,
 		window.onDidChangeActiveTextEditor(updateStatusBarVisibility),
-		workspace.onDidChangeWorkspaceFolders(startLanguageServerIfSuitable)
+		workspace.onDidChangeWorkspaceFolders((event) => {
+			event.removed.forEach(removedWorkspace => {
+				activeWatchers.get(removedWorkspace.uri.fsPath)?.dispose()
+				activeWatchers.delete(removedWorkspace.uri.fsPath)
+			})
+			event.added.forEach(watchPackageJSON)
+			refreshLanguageServer()
+		}),
+		new Disposable(() => {
+			activeWatchers.forEach(watcher => watcher.dispose())
+			activeWatchers.clear()
+		})
 	);
 
 	await startLanguageServerIfSuitable()
+}
+
+let checkNeeded = false
+let checkingServer = false
+async function refreshLanguageServer() {
+	checkNeeded = true
+	if (checkingServer) return
+
+	checkingServer = true
+	while (checkNeeded) {
+		checkNeeded = false
+		await startLanguageServerIfSuitable()
+	}
+	checkingServer = false
+}
+
+async function startLanguageServerIfSuitable() {
+	const frontendFriendsDirectories = await workspaceFoldersWithFrontendFriends()
+	if (frontendFriendsDirectories.length > 0) {
+		if (!client) {
+			client = createLanguageServerClient(serverPath, frontendFriendsDirectories)
+			await client.start()
+			console.log('Started language server')
+		} else {
+			await client.sendNotification('ff-directories', { folders: frontendFriendsDirectories })
+		}
+	} else if (client) {
+		console.log('Stopped language server')
+		await client.stop()
+		frontendFriendsDetected = false
+		statusBarItem?.hide()
+		client = undefined
+	}
 }
 
 function createLanguageServerClient(serverPath: string, frontendFriendsFolders: string[]) {
