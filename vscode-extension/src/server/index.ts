@@ -1,22 +1,21 @@
-import { getLanguageService, newHTMLDataProvider } from 'vscode-html-languageservice';
-import { getCSSLanguageService } from 'vscode-css-languageservice';
-import { CompletionParams, createConnection, HoverParams, ProposedFeatures, TextDocuments, TextDocumentSyncKind } from 'vscode-languageserver/node';
-import { TextDocument, Position } from 'vscode-languageserver-textdocument';
+import { getLanguageService, newHTMLDataProvider } from 'vscode-html-languageservice'
+import { getCSSLanguageService } from 'vscode-css-languageservice'
+import { CompletionParams, createConnection, HoverParams, ProposedFeatures, TextDocuments, TextDocumentSyncKind } from 'vscode-languageserver/node'
+import { TextDocument, Position } from 'vscode-languageserver-textdocument'
 import ts from 'typescript'
-import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path'
-import { readFileSync } from 'node:fs';
+import { URI } from 'vscode-uri'
 
 async function runDiagnostics(program: ts.Program, file: string) {
 	const { diagnoseFile } = await import('@applicvision/frontend-friends-diagnostics')
 	return diagnoseFile(program, file)
 }
 
-const connection = createConnection(ProposedFeatures.all);
+const connection = createConnection(ProposedFeatures.all)
 
-const documents = new TextDocuments(TextDocument);
+const documents = new TextDocuments(TextDocument)
 
-const htmlLanguageService = getLanguageService();
+const htmlLanguageService = getLanguageService()
 
 htmlLanguageService.setDataProviders(true, [newHTMLDataProvider('frontend-friends', {
 	version: 1.1,
@@ -34,15 +33,16 @@ htmlLanguageService.setDataProviders(true, [newHTMLDataProvider('frontend-friend
 })])
 const cssLanguageService = getCSSLanguageService()
 
-let tsService: ts.LanguageService | undefined
+const tsServices = new Map<string, ts.LanguageService>()
 
 connection.onInitialize((params) => {
-
-	const workspaceUri = params.workspaceFolders?.[0].uri
-	if (workspaceUri) {
-		const path = fileURLToPath(workspaceUri)
-		tsService = createTSService(path)
-	}
+	const frontendFriendsFolders: string[] = params.initializationOptions?.folders ?? []
+	frontendFriendsFolders.forEach(folder => {
+		const tsService = createTSService(folder)
+		if (tsService) {
+			tsServices.set(folder, tsService)
+		}
+	})
 
 	return {
 		capabilities: {
@@ -54,8 +54,26 @@ connection.onInitialize((params) => {
 			},
 			hoverProvider: true
 		}
-	};
-});
+	}
+})
+
+connection.onNotification('ff-directories', (params: { folders: string[] }) => {
+	Array.from(tsServices.keys())
+		.filter(workspace => !params.folders.includes(workspace))
+		.forEach(removedWorkspace => {
+			tsServices.get(removedWorkspace)?.dispose()
+			tsServices.delete(removedWorkspace)
+		})
+
+	params.folders
+		.filter(folder => !tsServices.has(folder))
+		.forEach(newWorkspace => {
+			const tsService = createTSService(newWorkspace)
+			if (tsService) {
+				tsServices.set(newWorkspace, tsService)
+			}
+		})
+})
 
 function createTSService(path: string) {
 	const configFilePath = ts.findConfigFile(path, ts.sys.fileExists) ??
@@ -90,31 +108,26 @@ function createTSService(path: string) {
 		return
 	}
 
-	parsedConfig.fileNames.forEach(fileName => {
-		const content = readFileSync(fileName).toString()
-		sourceFileCache.set(fileName, { version: 0, text: content, sourceFile: ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true) })
-	})
-
 	const host: ts.LanguageServiceHost = {
 		getCompilationSettings: () => parsedConfig.options,
 		getScriptFileNames: () => parsedConfig.fileNames,
 		getScriptSnapshot: fileName => {
-			const cached = sourceFileCache.get(fileName)
-			if (cached) {
-				return ts.ScriptSnapshot.fromString(cached.text)
-			}
-			const cachedLibFile = libFileCache.get(fileName)
-			if (cachedLibFile) return cachedLibFile
+
+			const cachedActiveFile = activeFilesCache.get(fileName)
+			if (cachedActiveFile) return ts.ScriptSnapshot.fromString(cachedActiveFile.text)
+
+			const cachedFile = fileSystemCache.get(fileName)
+			if (cachedFile) return cachedFile
 
 			const text = ts.sys.readFile(fileName)
 			if (typeof text == 'string') {
 				const snapshot = ts.ScriptSnapshot.fromString(text)
-				libFileCache.set(fileName, snapshot)
+				fileSystemCache.set(fileName, snapshot)
 				return snapshot
 			}
 		},
-		getScriptVersion: fileName => String(sourceFileCache.get(fileName)?.version),
-		getCurrentDirectory: () => process.cwd(),
+		getScriptVersion: fileName => String(activeFilesCache.get(fileName)?.version ?? 0),
+		getCurrentDirectory: () => path,
 		getDefaultLibFileName: options => ts.getDefaultLibFilePath(options),
 
 		fileExists: ts.sys.fileExists,
@@ -126,37 +139,29 @@ function createTSService(path: string) {
 	return ts.createLanguageService(host)
 }
 
-const sourceFileCache = new Map<string, { version: number, sourceFile: ts.SourceFile, text: string }>();
+const activeFilesCache = new Map<string, { version: number, text: string }>()
 
-const libFileCache = new Map<string, ts.IScriptSnapshot>()
+const fileSystemCache = new Map<string, ts.IScriptSnapshot>()
 
 function getTsSourceFile(document: TextDocument) {
-	const path = fileURLToPath(document.uri)
+	const path = URI.parse(document.uri).fsPath
 
-	const cached = sourceFileCache.get(path)
-	if (cached?.version == document.version) {
-		return cached.sourceFile
-	}
-	console.log('reading file', 'this should probab not happen')
-	const text = document.getText()
-	const sourceFile = ts.createSourceFile(document.uri, text, ts.ScriptTarget.Latest, true)
-	sourceFileCache.set(document.uri, { version: document.version, sourceFile, text })
-	return sourceFile
+	return getProgramForPath(path)?.getSourceFile(path)
 }
 
 function activeTaggedTemplateDocument(params: HoverParams | CompletionParams): { type: 'html' | 'css' | 'xml', document: TextDocument } | undefined {
 
 	const document = documents.get(params.textDocument.uri)
 
-	if (!document) {
-		return
-	}
+	if (!document) return
 
 	if (!document.getText().includes('@applicvision/frontend-friends')) {
 		return
 	}
 
 	let tsSource = getTsSourceFile(document)
+
+	if (!tsSource) return
 
 	const offset = document.offsetAt(params.position)
 
@@ -176,8 +181,6 @@ function activeTaggedTemplateDocument(params: HoverParams | CompletionParams): {
 	}
 
 	if (!taggedTemplate) return
-
-	taggedTemplate.tag
 
 	const tagName = taggedTemplate.tag.getText()
 
@@ -229,6 +232,19 @@ connection.onCompletion((params, _token) => {
 
 // TODO: Handle new files
 
+function getProgramForPath(path: string) {
+	const workspaceFolders = Array.from(tsServices.keys())
+
+	workspaceFolders.sort((a, b) => b.length - a.length)
+
+	for (const workspacePath of workspaceFolders) {
+
+		if (path.startsWith(workspacePath)) {
+			return tsServices.get(workspacePath)?.getProgram()
+		}
+	}
+}
+
 let notificationSent = false
 documents.onDidChangeContent(async (change) => {
 
@@ -236,15 +252,14 @@ documents.onDidChangeContent(async (change) => {
 
 	const usesFF = text.includes('@applicvision/frontend-friends')
 
-	const path = fileURLToPath(change.document.uri)
+	const path = URI.parse(change.document.uri).fsPath
 
-	sourceFileCache.set(path, {
+	activeFilesCache.set(path, {
 		text,
 		version: change.document.version,
-		sourceFile: ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true)
 	})
 
-	const program = tsService?.getProgram()
+	const program = getProgramForPath(path)
 
 	if (!program) return
 
@@ -256,7 +271,16 @@ documents.onDidChangeContent(async (change) => {
 	})
 
 	if (!notificationSent && usesFF) {
-		connection.sendNotification('ff-used')
+		await connection.sendNotification('ff-used')
+		notificationSent = true
+	}
+})
+
+documents.onDidClose((event) => {
+	const path = URI.parse(event.document.uri).fsPath
+	// Clear file system cache if user touched the file
+	if (activeFilesCache.delete(path)) {
+		fileSystemCache.delete(path)
 	}
 })
 

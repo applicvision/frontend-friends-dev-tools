@@ -6,6 +6,7 @@
 		"module": "node16",
 		"target": "ES2022",
 		"outDir": "out",
+		"rootDir": "./src",
 		"sourceMap": true,
 		"strict": true, /* enable all strict type-checking options */
 		/* Additional Checks */
