@@ -65,7 +65,7 @@
     "vscode:prepublish": "npm run build"
   },
   "dependencies": {
-    "@applicvision/frontend-friends-diagnostics": "latest",
+    "@applicvision/frontend-friends-diagnostics": "^1.1.0",
     "typescript": "^5.9.3",
     "vscode-css-languageservice": "^6.3.8",
     "vscode-html-languageservice": "^5.6.0",

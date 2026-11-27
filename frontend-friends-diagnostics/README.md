@@ -100,6 +100,9 @@ function diagnoseFile(program: ts.Program, fileName: string): {
     message: string;
     line: string;
     severity: 1 | 2 | 3 | 4;
+    source: string; // 'frontend-friends', 'html-validate' or 'css-tree'
+    code: string; // Identifier of the broken rule, e.g. 'close-order'
+    codeDescription?: { href: string }; // Link to rule documentation
 }[]
 
 type TextPosition = { line: number, character: number }

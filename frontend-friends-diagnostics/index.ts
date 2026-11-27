@@ -57,8 +57,24 @@ const severity = {
 
 type Severity = typeof severity[keyof typeof severity]
 
-const taggedTemplateRegex = /(html|svg|css)`/dg
-const keyedTaggedTemplateRegex = /(html|svg)\.key\(/dg
+export type Diagnostic = {
+	range: Range
+	message: string
+	/** The full text of the line where the diagnostic starts */
+	line: string
+	severity: Severity
+	/** What produced the diagnostic: 'frontend-friends', 'html-validate' or 'css-tree' */
+	source: string
+	/** Identifier of the rule which was broken */
+	code: string
+	/** Link to documentation for the rule, when available */
+	codeDescription?: { href: string }
+}
+
+type GetLine = (line: number) => string
+
+const taggedTemplateRegex = /\b(html|svg|css)\s*`/dg
+const keyedTaggedTemplateRegex = /\b(html|svg)\.key\(/dg
 
 const htmlValidate = new HtmlValidate({
 	extends: ['html-validate:standard'],
@@ -123,10 +139,25 @@ function isTypeObject(type: ts.Type) {
 
 function diagnoseTaggedTemplateSpans(
 	typeChecker: ts.TypeChecker,
-	diagnostics: { range: Range, message: string, line: string, severity: Severity }[],
+	diagnostics: Diagnostic[],
 	descriptors: InterpolationDescriptor[],
 	templateSpans: ts.NodeArray<ts.TemplateSpan>,
-	tsSource: ts.SourceFile) {
+	tsSource: ts.SourceFile,
+	getLine: GetLine) {
+
+	const attributeDiagnostic = (expression: ts.Expression, descriptor: Exclude<InterpolationDescriptor, { type: 'content' }>, code: string, message: string) => {
+		const startPos = expression.getStart() - 2 - descriptor.attributeStart
+		const start = tsSource.getLineAndCharacterOfPosition(startPos)
+		const end = tsSource.getLineAndCharacterOfPosition(startPos + descriptor.attribute.length)
+		diagnostics.push(frontendFriendsDiagnostic({ start, end }, code, message, getLine))
+	}
+
+	// Highlights the ${ of an interpolation
+	const interpolationDiagnostic = (expression: ts.Expression, code: string, message: string) => {
+		const start = tsSource.getLineAndCharacterOfPosition(expression.getStart() - 2)
+		const end = tsSource.getLineAndCharacterOfPosition(expression.getStart())
+		diagnostics.push(frontendFriendsDiagnostic({ start, end }, code, message, getLine))
+	}
 
 	return templateSpans.map(({ expression }, index) => {
 
@@ -142,63 +173,52 @@ function diagnoseTaggedTemplateSpans(
 			case 'eventhandler':
 				const [callSignature] = typeChecker.getSignaturesOfType(type, ts.SignatureKind.Call)
 				if (!callSignature) {
-					const diagnostic = attributeDiagnostic(expression, tsSource, interpolationDescriptor,
+					attributeDiagnostic(expression, interpolationDescriptor, 'event-handler-type',
 						'A function is expected as event handler'
 					)
-					diagnostics.push(diagnostic)
 				}
 				break
 			case 'attribute':
 				if (isBoolean) {
 					if (interpolationDescriptor.quotemark) {
-						const diagnostic = attributeDiagnostic(expression, tsSource, interpolationDescriptor,
+						attributeDiagnostic(expression, interpolationDescriptor, 'boolean-attribute-quotes',
 							'Boolean attributes can not use quotemark'
 						)
-						diagnostics.push(diagnostic)
 					}
 
 				} else if (!isStringOrNumber) {
-					const diagnostic = attributeDiagnostic(expression, tsSource, interpolationDescriptor,
+					attributeDiagnostic(expression, interpolationDescriptor, 'attribute-type',
 						'Attributes should use a string, number or boolean'
 					)
-					diagnostics.push(diagnostic)
 				}
 				break
 			case 'attributeExtension':
 				if (!isStringOrNumber) {
-					const start = tsSource.getLineAndCharacterOfPosition(expression.getStart() - 2)
-					const end = tsSource.getLineAndCharacterOfPosition(expression.getStart())
-					const allLines = tsSource.getFullText().split(/\r?\n/)
-					const line = allLines[start.line]
-					diagnostics.push({
-						message: 'Attribute extension can only be strings or numbers',
-						line,
-						severity: severity.warning,
-						range: { start, end }
-					})
+					interpolationDiagnostic(expression, 'attribute-extension-type',
+						'Attribute extension can only be strings or numbers'
+					)
 				}
 				break
 			case 'specialAttribute':
 				switch (interpolationDescriptor.attribute) {
 					case 'ff-share':
 						if (!isObject) {
-							const diagnostic = attributeDiagnostic(expression, tsSource, interpolationDescriptor, 'ff-share must use an object for two way binding')
-							diagnostics.push(diagnostic)
+							attributeDiagnostic(expression, interpolationDescriptor, 'ff-share-type',
+								'ff-share must use an object for two way binding'
+							)
 						}
 						const { elementName } = interpolationDescriptor
 						if (!(elementName.includes('-') || elementName == 'input' || elementName == 'textarea' || elementName == 'select')) {
-							const diagnostic = attributeDiagnostic(expression, tsSource, interpolationDescriptor,
+							attributeDiagnostic(expression, interpolationDescriptor, 'ff-share-element',
 								'ff-share can only be used in native input elements, or custom elements which implement two way binding'
 							)
-							diagnostics.push(diagnostic)
 						}
 						break
 					case 'ff-ref':
 						if (type.getSymbol()?.escapedName != 'ElementReference') {
-							const diagnostic = attributeDiagnostic(expression, tsSource, interpolationDescriptor,
+							attributeDiagnostic(expression, interpolationDescriptor, 'ff-ref-type',
 								'ff-ref must use an ElementReference instance, created with ref().'
 							)
-							diagnostics.push(diagnostic)
 						}
 						break
 				}
@@ -208,35 +228,19 @@ function diagnoseTaggedTemplateSpans(
 
 				if (typeChecker.isArrayType(type)) {
 					if (typeAsString != 'DynamicFragment[]') {
-						const start = tsSource.getLineAndCharacterOfPosition(expression.getStart() - 2)
-						const end = tsSource.getLineAndCharacterOfPosition(expression.getStart())
-						const allLines = tsSource.getFullText().split(/\r?\n/)
-						const line = allLines[start.line]
-						diagnostics.push({
-							message: 'Array content should be declared with html tag, ' + typeAsString,
-							line,
-							severity: severity.warning,
-							range: { start, end },
-						})
+						interpolationDiagnostic(expression, 'array-content-type',
+							'Array content should be declared with html tag, ' + typeAsString
+						)
 					}
 				} else if (isObject && typeAsString != 'DynamicFragment' && typeAsString != 'PropertySetter' && typeAsString != 'InnerHTML') {
-					const start = tsSource.getLineAndCharacterOfPosition(expression.getStart() - 2)
-					const end = tsSource.getLineAndCharacterOfPosition(expression.getStart())
-					const allLines = tsSource.getFullText().split(/\r?\n/)
-					const line = allLines[start.line]
-					diagnostics.push({
-						message: 'Invalid content: ' + typeAsString,
-						line,
-						severity: severity.warning,
-						range: { start, end }
-					})
+					interpolationDiagnostic(expression, 'content-type', 'Invalid content: ' + typeAsString)
 				}
 		}
 		return type
 	})
 }
 
-export function diagnoseFile(program: ts.Program, fileName: string) {
+export function diagnoseFile(program: ts.Program, fileName: string): Diagnostic[] {
 
 	const tsSource = program.getSourceFile(fileName)
 
@@ -254,7 +258,7 @@ export function diagnoseFile(program: ts.Program, fileName: string) {
 		return _allLines[lineNumber]
 	}
 
-	const diagnostics: { range: Range, message: string, line: string, severity: 1 | 2 | 3 | 4 }[] = []
+	const diagnostics: Diagnostic[] = []
 	const taggedTemplates = findTaggedTemplates(tsSource)
 
 	taggedTemplates.forEach(taggedTemplate => {
@@ -282,7 +286,7 @@ export function diagnoseFile(program: ts.Program, fileName: string) {
 
 		const descriptors = interpolationDescriptors(templateParts)
 
-		const types = diagnoseTaggedTemplateSpans(typeChecker, diagnostics, descriptors, taggedTemplate.template.templateSpans, tsSource)
+		const types = diagnoseTaggedTemplateSpans(typeChecker, diagnostics, descriptors, taggedTemplate.template.templateSpans, tsSource, getLine)
 
 		const htmlString = buildHtmlStringWithWhitespace(taggedTemplate, descriptors, types, tsSource)
 		if (shouldDiagnoseHtml) {
@@ -293,7 +297,7 @@ export function diagnoseFile(program: ts.Program, fileName: string) {
 	return diagnostics
 }
 
-function diagnoseHtml(htmlString: string, start: ts.LineAndCharacter, getLine: (line: number) => string, interpolationRanges: InterpolationRange[] = []) {
+function diagnoseHtml(htmlString: string, start: ts.LineAndCharacter, getLine: GetLine, interpolationRanges: InterpolationRange[] = []): Diagnostic[] {
 	const htmlDiag = htmlValidate.validateStringSync(htmlString)
 
 	return htmlDiag.results.flatMap(result => {
@@ -330,18 +334,24 @@ function diagnoseHtml(htmlString: string, start: ts.LineAndCharacter, getLine: (
 						character: startCharacter + message.size
 					}
 				}
-				return {
+				const diagnostic: Diagnostic = {
 					message: message.message,
 					line,
 					severity: severity.warning,
 					range,
+					source: 'html-validate',
+					code: message.ruleId
 				}
+				if (message.ruleUrl) {
+					diagnostic.codeDescription = { href: message.ruleUrl }
+				}
+				return diagnostic
 			})
 			.filter(diagnostics => diagnostics != null)
 	})
 }
 
-function diagnoseCss(taggedTemplate: ts.TaggedTemplateExpression, tsSource: ts.SourceFile, getLine: (line: number) => string) {
+function diagnoseCss(taggedTemplate: ts.TaggedTemplateExpression, tsSource: ts.SourceFile, getLine: GetLine): Diagnostic[] {
 	const { template } = taggedTemplate
 
 	// Use the source text, rather than the cooked template text, so that offsets match the file
@@ -371,7 +381,9 @@ function diagnoseCss(taggedTemplate: ts.TaggedTemplateExpression, tsSource: ts.S
 			message: problem.message,
 			line: getLine(start.line),
 			severity: severity.warning,
-			range: { start, end }
+			range: { start, end },
+			source: 'css-tree',
+			code: problem.code
 		}
 	})
 }
@@ -387,17 +399,14 @@ function findNodeAt(root: ts.Node, pos: number): ts.Node | undefined {
 
 type InterpolationDescriptor = ReturnType<typeof interpolationDescriptors>[number]
 
-function attributeDiagnostic(expression: ts.Expression, tsSource: ts.SourceFile, descriptor: Exclude<InterpolationDescriptor, { type: 'content' }>, message: string) {
-	const startPos = expression.getStart() - 2 - descriptor.attributeStart
-	const start = tsSource.getLineAndCharacterOfPosition(startPos)
-	const end = tsSource.getLineAndCharacterOfPosition(startPos + descriptor.attribute.length)
-	const allLines = tsSource.getFullText().split(/\r?\n/)
-	const line = allLines[start.line]
+function frontendFriendsDiagnostic(range: Range, code: string, message: string, getLine: GetLine): Diagnostic {
 	return {
 		message,
-		line,
+		line: getLine(range.start.line),
 		severity: severity.warning,
-		range: { start, end }
+		range,
+		source: 'frontend-friends',
+		code
 	}
 }
 

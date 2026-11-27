@@ -8,6 +8,8 @@ export type CssProblem = {
 	/** Offset in the validated source where the problem ends */
 	end: number
 	message: string
+	/** Identifier of the kind of problem, e.g. 'unknown-property' */
+	code: string
 }
 
 type OffsetRange = { start: number, end: number }
@@ -150,7 +152,8 @@ export function validateCss(source: string, ignoredRanges: OffsetRange[] = []): 
 			report({
 				start: error.offset,
 				end: Math.min(error.offset + 1, source.length),
-				message: error.message
+				message: error.message,
+				code: 'syntax'
 			})
 		}
 	})
@@ -186,7 +189,7 @@ function validateSelector(prelude: csstree.Raw, nested: boolean, report: (proble
 
 	const text = prelude.value
 	if (!text.trim()) {
-		report({ start: loc.start.offset, end: Math.max(loc.end.offset, loc.start.offset + 1), message: 'Selector is expected' })
+		report({ start: loc.start.offset, end: Math.max(loc.end.offset, loc.start.offset + 1), message: 'Selector is expected', code: 'selector' })
 		return
 	}
 
@@ -201,7 +204,7 @@ function validateSelector(prelude: csstree.Raw, nested: boolean, report: (proble
 	})
 	if (parseError) {
 		const start = loc.start.offset + Math.max(0, parseError.offset - prefix.length)
-		report({ start, end: Math.min(start + 1, loc.end.offset), message: parseError.message })
+		report({ start, end: Math.min(start + 1, loc.end.offset), message: parseError.message, code: 'selector' })
 	}
 }
 
@@ -216,7 +219,8 @@ function validateAtrule(node: csstree.Atrule, report: (problem: CssProblem) => v
 		report({
 			start: loc.start.offset,
 			end: loc.start.offset + name.length + 1,
-			message: `Unknown at-rule '@${name}'`
+			message: `Unknown at-rule '@${name}'`,
+			code: 'unknown-at-rule'
 		})
 		return
 	}
@@ -229,7 +233,8 @@ function validateAtrule(node: csstree.Atrule, report: (problem: CssProblem) => v
 				report({
 					start: range.start.offset,
 					end: range.end.offset,
-					message: `Invalid prelude for '@${name}': ${firstLine(error.message)}`
+					message: `Invalid prelude for '@${name}': ${firstLine(error.message)}`,
+					code: 'invalid-prelude'
 				})
 			}
 		}
@@ -255,18 +260,18 @@ function validateDeclaration(node: csstree.Declaration, atrule: csstree.Atrule |
 
 	if (descriptors && !isDescriptor && !syntax.lexer.getProperty(property)) {
 		// Some at-rules, like @page, accept regular properties as well, so only report names which are neither
-		report({ ...nameRange, message: `Unknown descriptor '${property}' in '@${atrule!.name}'` })
+		report({ ...nameRange, message: `Unknown descriptor '${property}' in '@${atrule!.name}'`, code: 'unknown-descriptor' })
 		return
 	} else if (!isDescriptor && !syntax.lexer.getProperty(property)) {
 		if (!vendorPrefix.test(property)) {
-			report({ ...nameRange, message: `Unknown property '${property}'` })
+			report({ ...nameRange, message: `Unknown property '${property}'`, code: 'unknown-property' })
 		}
 		return
 	}
 
 	if (node.value.type == 'Raw') {
 		if (!node.value.value.trim()) {
-			report({ ...nameRange, message: `Missing value for '${property}'` })
+			report({ ...nameRange, message: `Missing value for '${property}'`, code: 'missing-value' })
 		}
 		// Values which could not be parsed can not be matched
 		return
@@ -274,7 +279,7 @@ function validateDeclaration(node: csstree.Declaration, atrule: csstree.Atrule |
 
 	const valueText = syntax.generate(node.value)
 	if (!valueText.trim()) {
-		report({ ...nameRange, message: `Missing value for '${property}'` })
+		report({ ...nameRange, message: `Missing value for '${property}'`, code: 'missing-value' })
 		return
 	}
 	if (substitutionFunction.test(valueText)) return
@@ -289,7 +294,8 @@ function validateDeclaration(node: csstree.Declaration, atrule: csstree.Atrule |
 		report({
 			start: range.start.offset,
 			end: Math.max(range.end.offset, range.start.offset + 1),
-			message: `Invalid value for '${property}': '${valueText}'`
+			message: `Invalid value for '${property}': '${valueText}'`,
+			code: 'invalid-value'
 		})
 	}
 }

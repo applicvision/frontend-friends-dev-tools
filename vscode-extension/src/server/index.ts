@@ -1,9 +1,9 @@
 import { getLanguageService, newHTMLDataProvider } from 'vscode-html-languageservice'
 import { getCSSLanguageService } from 'vscode-css-languageservice'
-import { CompletionParams, createConnection, HoverParams, ProposedFeatures, TextDocuments, TextDocumentSyncKind } from 'vscode-languageserver/node'
+import { CompletionParams, createConnection, FileChangeType, HoverParams, ProposedFeatures, TextDocuments, TextDocumentSyncKind } from 'vscode-languageserver/node'
 import { TextDocument, Position } from 'vscode-languageserver-textdocument'
 import ts from 'typescript'
-import { dirname } from 'node:path'
+import { basename, dirname } from 'node:path'
 import { URI } from 'vscode-uri'
 
 async function runDiagnostics(program: ts.Program, file: string) {
@@ -33,7 +33,13 @@ htmlLanguageService.setDataProviders(true, [newHTMLDataProvider('frontend-friend
 })])
 const cssLanguageService = getCSSLanguageService()
 
-const tsServices = new Map<string, ts.LanguageService>()
+type TSService = {
+	service: ts.LanguageService
+	/** Reads the tsconfig/jsconfig again, e.g. to pick up new files */
+	reloadConfig(): void
+}
+
+const tsServices = new Map<string, TSService>()
 
 connection.onInitialize((params) => {
 	const frontendFriendsFolders: string[] = params.initializationOptions?.folders ?? []
@@ -61,7 +67,7 @@ connection.onNotification('ff-directories', (params: { folders: string[] }) => {
 	Array.from(tsServices.keys())
 		.filter(workspace => !params.folders.includes(workspace))
 		.forEach(removedWorkspace => {
-			tsServices.get(removedWorkspace)?.dispose()
+			tsServices.get(removedWorkspace)?.service.dispose()
 			tsServices.delete(removedWorkspace)
 		})
 
@@ -73,9 +79,10 @@ connection.onNotification('ff-directories', (params: { folders: string[] }) => {
 				tsServices.set(newWorkspace, tsService)
 			}
 		})
+	scheduleRefreshOfOpenDocuments()
 })
 
-function createTSService(path: string) {
+function readProjectConfig(path: string) {
 	const configFilePath = ts.findConfigFile(path, ts.sys.fileExists) ??
 		ts.findConfigFile(path, ts.sys.fileExists, 'jsconfig.json')
 
@@ -101,32 +108,42 @@ function createTSService(path: string) {
 		parsedConfig = ts.parseJsonConfigFileContent(fallbackConfig, ts.sys, path)
 	}
 
-
-
 	if (parsedConfig.errors.length) {
 		console.warn('Detected errors in config', parsedConfig.errors)
 		return
 	}
+	return parsedConfig
+}
+
+function createTSService(path: string): TSService | undefined {
+	let parsedConfig = readProjectConfig(path)
+	if (!parsedConfig) return
 
 	const host: ts.LanguageServiceHost = {
-		getCompilationSettings: () => parsedConfig.options,
-		getScriptFileNames: () => parsedConfig.fileNames,
+		getCompilationSettings: () => parsedConfig!.options,
+		getScriptFileNames: () => parsedConfig!.fileNames,
 		getScriptSnapshot: fileName => {
+			const key = cacheKey(fileName)
 
-			const cachedActiveFile = activeFilesCache.get(fileName)
+			const cachedActiveFile = activeFilesCache.get(key)
 			if (cachedActiveFile) return ts.ScriptSnapshot.fromString(cachedActiveFile.text)
 
-			const cachedFile = fileSystemCache.get(fileName)
+			const cachedFile = fileSystemCache.get(key)
 			if (cachedFile) return cachedFile
 
 			const text = ts.sys.readFile(fileName)
 			if (typeof text == 'string') {
 				const snapshot = ts.ScriptSnapshot.fromString(text)
-				fileSystemCache.set(fileName, snapshot)
+				fileSystemCache.set(key, snapshot)
 				return snapshot
 			}
 		},
-		getScriptVersion: fileName => String(activeFilesCache.get(fileName)?.version ?? 0),
+		getScriptVersion: fileName => {
+			const key = cacheKey(fileName)
+			const activeFile = activeFilesCache.get(key)
+			// Prefixes keep versions of open and closed files apart
+			return activeFile ? `open:${activeFile.version}` : `disk:${diskVersions.get(key) ?? 0}`
+		},
 		getCurrentDirectory: () => path,
 		getDefaultLibFileName: options => ts.getDefaultLibFilePath(options),
 
@@ -136,12 +153,31 @@ function createTSService(path: string) {
 
 	}
 
-	return ts.createLanguageService(host)
+	return {
+		service: ts.createLanguageService(host),
+		reloadConfig() {
+			// Keep the previous config if the new one has errors
+			parsedConfig = readProjectConfig(path) ?? parsedConfig
+		}
+	}
 }
 
+/**
+ * TypeScript uses forward slashes in file names, also on Windows, while URI.fsPath uses the platform separator.
+ */
+function cacheKey(fileName: string) {
+	const normalized = fileName.replaceAll('\\', '/')
+	return ts.sys.useCaseSensitiveFileNames ? normalized : normalized.toLowerCase()
+}
+
+/** Content of files open in the editor */
 const activeFilesCache = new Map<string, { version: number, text: string }>()
 
+/** Content of files read from disk */
 const fileSystemCache = new Map<string, ts.IScriptSnapshot>()
+
+/** Incremented when a file changes on disk, so that the language service reads it again */
+const diskVersions = new Map<string, number>()
 
 function getTsSourceFile(document: TextDocument) {
 	const path = URI.parse(document.uri).fsPath
@@ -232,7 +268,7 @@ connection.onCompletion((params, _token) => {
 
 // TODO: Handle new files
 
-function getProgramForPath(path: string) {
+function getTSServiceForPath(path: string) {
 	const workspaceFolders = Array.from(tsServices.keys())
 
 	workspaceFolders.sort((a, b) => b.length - a.length)
@@ -240,24 +276,21 @@ function getProgramForPath(path: string) {
 	for (const workspacePath of workspaceFolders) {
 
 		if (path.startsWith(workspacePath)) {
-			return tsServices.get(workspacePath)?.getProgram()
+			return tsServices.get(workspacePath)
 		}
 	}
 }
 
+function getProgramForPath(path: string) {
+	return getTSServiceForPath(path)?.service.getProgram()
+}
+
 let notificationSent = false
-documents.onDidChangeContent(async (change) => {
 
-	const text = change.document.getText()
+async function diagnoseDocument(document: TextDocument) {
+	const usesFF = document.getText().includes('@applicvision/frontend-friends')
 
-	const usesFF = text.includes('@applicvision/frontend-friends')
-
-	const path = URI.parse(change.document.uri).fsPath
-
-	activeFilesCache.set(path, {
-		text,
-		version: change.document.version,
-	})
+	const path = URI.parse(document.uri).fsPath
 
 	const program = getProgramForPath(path)
 
@@ -266,7 +299,7 @@ documents.onDidChangeContent(async (change) => {
 	const diagnostics = usesFF ? await runDiagnostics(program, path) : []
 
 	connection.sendDiagnostics({
-		uri: change.document.uri,
+		uri: document.uri,
 		diagnostics: diagnostics
 	})
 
@@ -274,14 +307,77 @@ documents.onDidChangeContent(async (change) => {
 		await connection.sendNotification('ff-used')
 		notificationSent = true
 	}
+}
+
+let refreshTimer: NodeJS.Timeout | undefined
+let lastChangedUri: string | undefined
+
+/**
+ * Diagnoses all open documents again, since they may depend on a file which changed.
+ * Bursts of changes (e.g. typing) are coalesced into one refresh.
+ */
+function scheduleRefreshOfOpenDocuments(exceptUri?: string) {
+	lastChangedUri = exceptUri
+	clearTimeout(refreshTimer)
+	refreshTimer = setTimeout(async () => {
+		for (const document of documents.all()) {
+			// The changed document itself has already been diagnosed
+			if (document.uri != lastChangedUri) {
+				await diagnoseDocument(document)
+			}
+		}
+	}, 300)
+}
+
+documents.onDidChangeContent(async (change) => {
+
+	const path = URI.parse(change.document.uri).fsPath
+
+	activeFilesCache.set(cacheKey(path), {
+		text: change.document.getText(),
+		version: change.document.version,
+	})
+
+	await diagnoseDocument(change.document)
+
+	scheduleRefreshOfOpenDocuments(change.document.uri)
 })
 
 documents.onDidClose((event) => {
-	const path = URI.parse(event.document.uri).fsPath
+	const key = cacheKey(URI.parse(event.document.uri).fsPath)
 	// Clear file system cache if user touched the file
-	if (activeFilesCache.delete(path)) {
-		fileSystemCache.delete(path)
+	if (activeFilesCache.delete(key)) {
+		fileSystemCache.delete(key)
 	}
+	// Only open documents are kept up to date, so remove diagnostics which may become stale
+	connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] })
+	scheduleRefreshOfOpenDocuments()
+})
+
+const configFileName = /^(ts|js)config.*\.json$/
+
+connection.onDidChangeWatchedFiles(({ changes }) => {
+	const servicesToReload = new Set<TSService>()
+
+	for (const { uri, type } of changes) {
+		const path = URI.parse(uri).fsPath
+		const key = cacheKey(path)
+
+		fileSystemCache.delete(key)
+		diskVersions.set(key, (diskVersions.get(key) ?? 0) + 1)
+
+		if (configFileName.test(basename(path))) {
+			// A config may be extended by projects in other folders, so reload all
+			tsServices.forEach(service => servicesToReload.add(service))
+		} else if (type == FileChangeType.Created || type == FileChangeType.Deleted) {
+			// The set of files in the project changed
+			const service = getTSServiceForPath(path)
+			if (service) servicesToReload.add(service)
+		}
+	}
+
+	servicesToReload.forEach(service => service.reloadConfig())
+	scheduleRefreshOfOpenDocuments()
 })
 
 function logVirtualDoc(doc: string, position: Position) {
@@ -299,9 +395,10 @@ function buildTaggedStringWithWhitespace(node: ts.TaggedTemplateExpression, docu
 
 	const template = node.template
 
-	const position = document.positionAt(node.getStart())
+	// Position after the opening backtick. The tag may be followed by whitespace, or span multiple lines, e.g. html.key(...)
+	const position = document.positionAt(template.getStart() + 1)
 
-	const initialWhitespace = '\n'.repeat(position.line) + ' '.repeat(position.character + node.tag.getWidth() + 1)
+	const initialWhitespace = '\n'.repeat(position.line) + ' '.repeat(position.character)
 
 	if (ts.isNoSubstitutionTemplateLiteral(template)) {
 		return initialWhitespace + template.text
