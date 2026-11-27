@@ -16,6 +16,8 @@ import {
 } from 'vscode-languageclient/node';
 
 let client: LanguageClient | undefined
+// Notifies the language server about files changed outside the editor
+let sourceFileWatcher: FileSystemWatcher | undefined
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 let statusBarItem: StatusBarItem | undefined
@@ -95,6 +97,8 @@ async function startLanguageServerIfSuitable() {
 	} else if (client) {
 		console.log('Stopped language server')
 		await client.stop()
+		sourceFileWatcher?.dispose()
+		sourceFileWatcher = undefined
 		frontendFriendsDetected = false
 		statusBarItem?.hide()
 		client = undefined
@@ -108,11 +112,16 @@ function createLanguageServerClient(serverPath: string, frontendFriendsFolders: 
 		debug: { module: serverPath, transport: TransportKind.ipc, options: { execArgv: ['--nolazy', '--inspect=6009'] } }
 	}
 
+	sourceFileWatcher = workspace.createFileSystemWatcher('**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx,json}')
+
 	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
 			{ scheme: 'file', language: 'javascript' },
 			{ scheme: 'file', language: 'typescript' }
 		],
+		synchronize: {
+			fileEvents: sourceFileWatcher
+		},
 		initializationOptions: {
 			folders: frontendFriendsFolders
 		}
@@ -170,5 +179,6 @@ function showStatusBarItem() {
 
 // This method is called when your extension is deactivated
 export function deactivate() {
+	sourceFileWatcher?.dispose()
 	return client?.stop()
 }
