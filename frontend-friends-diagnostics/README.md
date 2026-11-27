@@ -76,6 +76,8 @@ npx diagnose-fragments src/views/**.js
 
 The tool will look up tagged templates with a tag function named `html`. It uses the wonderful library [html-validate](https://www.npmjs.com/package/html-validate) to diagnose the HTML parts of the templates. It also checks that the interpolations have valid values.
 
+Tagged templates named `css` are validated with [css-tree](https://www.npmjs.com/package/css-tree). It reports syntax errors, unknown properties, at-rules and descriptors, and property values which do not match the CSS specification (e.g. `opacity: 2px`). Nested rules are supported. Declarations containing interpolations, or values using `var()`, `env()` or `attr()`, are not validated, since their values are not known until runtime.
+
 If no issues are found, the command prints no output and exits with code 0.
 
 ## NodeJS

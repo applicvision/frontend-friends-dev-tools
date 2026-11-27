@@ -2,6 +2,7 @@ import ts from 'typescript'
 import { HtmlValidate } from 'html-validate'
 import { interpolationDescriptors } from '@applicvision/frontend-friends/dynamic-fragment'
 import { dirname, resolve } from 'path'
+import { validateCss } from './css.ts'
 
 
 export function getProgram(configPath?: string) {
@@ -56,7 +57,7 @@ const severity = {
 
 type Severity = typeof severity[keyof typeof severity]
 
-const taggedTemplateRegex = /(html|svg)`/dg
+const taggedTemplateRegex = /(html|svg|css)`/dg
 const keyedTaggedTemplateRegex = /(html|svg)\.key\(/dg
 
 const htmlValidate = new HtmlValidate({
@@ -79,7 +80,7 @@ function findTaggedTemplates(root: ts.SourceFile) {
 
 		if (node?.parent && ts.isTaggedTemplateExpression(node.parent)) {
 			const { tag } = node.parent
-			if (ts.isIdentifier(tag) && (tag.text == 'html' || tag.text == 'svg')) {
+			if (ts.isIdentifier(tag) && (tag.text == 'html' || tag.text == 'svg' || tag.text == 'css')) {
 				taggedTemplateExpressions.push(node.parent)
 			}
 		}
@@ -258,6 +259,11 @@ export function diagnoseFile(program: ts.Program, fileName: string) {
 
 	taggedTemplates.forEach(taggedTemplate => {
 
+		if (taggedTemplate.tag.getText() == 'css') {
+			diagnostics.push(...diagnoseCss(taggedTemplate, tsSource, getLine))
+			return
+		}
+
 		const shouldDiagnoseHtml = taggedTemplate.tag.getText().includes('html')
 
 		const start = tsSource.getLineAndCharacterOfPosition(taggedTemplate.template.getStart() + 1)
@@ -332,6 +338,41 @@ function diagnoseHtml(htmlString: string, start: ts.LineAndCharacter, getLine: (
 				}
 			})
 			.filter(diagnostics => diagnostics != null)
+	})
+}
+
+function diagnoseCss(taggedTemplate: ts.TaggedTemplateExpression, tsSource: ts.SourceFile, getLine: (line: number) => string) {
+	const { template } = taggedTemplate
+
+	// Use the source text, rather than the cooked template text, so that offsets match the file
+	const templateStart = template.getStart() + 1
+	const sourceText = tsSource.text
+
+	const interpolations = ts.isNoSubstitutionTemplateLiteral(template) ? [] :
+		template.templateSpans.map(({ literal }, index) => ({
+			// Start of ${
+			start: (index == 0 ? template.head : template.templateSpans[index - 1].literal).getEnd() - 2 - templateStart,
+			// End of }
+			end: literal.getStart() + 1 - templateStart
+		}))
+
+	let cssString = sourceText.slice(templateStart, template.getEnd() - 1)
+	for (const { start, end } of interpolations) {
+		// Replace interpolations with whitespace, but keep line breaks to preserve positions
+		cssString = cssString.slice(0, start) +
+			cssString.slice(start, end).replace(/[^\r\n]/g, ' ') +
+			cssString.slice(end)
+	}
+
+	return validateCss(cssString, interpolations).map(problem => {
+		const start = tsSource.getLineAndCharacterOfPosition(templateStart + problem.start)
+		const end = tsSource.getLineAndCharacterOfPosition(templateStart + problem.end)
+		return {
+			message: problem.message,
+			line: getLine(start.line),
+			severity: severity.warning,
+			range: { start, end }
+		}
 	})
 }
 
